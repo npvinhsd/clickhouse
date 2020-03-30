@@ -41,11 +41,12 @@ var ESCAPE_STRING = {
 			.replace(/\\/g, '\\\\')
 			.replace(/\\/g, '\\')
 			.replace(/\t/g, '\\t')
+			.replace(/'/g, '\'\'')
 			.replace(/\n/g, '\\n');
 	},
-	
+
 	CSV: function (value) {
-		return value.replace (/\"/g, '""');
+		return value.replace(/\"/g, '""');
 	},
 };
 
@@ -72,7 +73,7 @@ const FORMATS = {
 };
 
 const REVERSE_FORMATS = Object.keys(FORMATS).reduce(
-	function(obj, format) {
+	function (obj, format) {
 		obj[FORMATS[format]] = format;
 		return obj;
 	},
@@ -101,16 +102,16 @@ function parseCSVStream(s = new Set()) {
 	let ref = {
 		fields: []
 	};
-	
+
 	return through(function (chunk) {
 		let str = chunk.toString();
-		let parsed = parseCSV(str, {header: isFirst});
+		let parsed = parseCSV(str, { header: isFirst });
 		let strarr = str.split("\n");
 		let plen = (isFirst && strarr.length - 1 || strarr.length) - parsed.length;
-		
+
 		if (!isFirst) {
 			chunk = Buffer.concat([Buffer.from([...s].join("\n")), chunk]).toString();
-			parsed = parseCSV(str, {header: isFirst});
+			parsed = parseCSV(str, { header: isFirst });
 			s = new Set();
 		}
 		strarr.splice(strarr.length - plen).forEach((value => s.add(value)));
@@ -124,20 +125,20 @@ function parseJSONStream() {
 }
 
 function parseTSVStream(s = new Set()) {
-    let isFirst = true;
-    let ref = {
+	let isFirst = true;
+	let ref = {
 		fields: []
 	};
- 
+
 	return through(function (chunk) {
 		let str = chunk.toString();
-		let parsed = parseTSV(str, {header: isFirst});
+		let parsed = parseTSV(str, { header: isFirst });
 		let strarr = str.split("\n");
 		let plen = (isFirst && strarr.length - 1 || strarr.length) - parsed.length;
-		
+
 		if (!isFirst) {
 			chunk = Buffer.concat([Buffer.from([...s].join("\n")), chunk]).toString();
-			parsed = parseTSV(str, {header: isFirst});
+			parsed = parseTSV(str, { header: isFirst });
 			s = new Set();
 		}
 		strarr.splice(strarr.length - plen).forEach((value => s.add(value)));
@@ -164,55 +165,55 @@ function chunkBuilder(isFirst, ref, chunk, parsed) {
 
 function encodeValue(quote, v, _format, isArray) {
 	const format = ALIASES[_format] || _format;
-	
+
 	switch (typeof v) {
 		case 'string':
 			if (isArray) {
 				return `'${ESCAPE_STRING[format] ? ESCAPE_STRING[format](v, quote) : v}'`;
 			}
-			
+
 			return ESCAPE_STRING[format] ? ESCAPE_STRING[format](v, quote) : v;
 		case 'number':
 			if (isNaN(v)) {
 				return 'nan';
 			}
-			
+
 			if (v === +Infinity) {
 				return '+inf';
 			}
-			
+
 			if (v === -Infinity) {
 				return '-inf';
 			}
-			
+
 			if (v === Infinity) {
 				return 'inf';
 			}
-			
+
 			return v;
 		case 'object':
-			
+
 			// clickhouse allows to use unix timestamp in seconds
 			if (v instanceof Date) {
-				return ("" + v.valueOf()).substr (0, 10);
+				return ("" + v.valueOf()).substr(0, 10);
 			}
-			
+
 			// you can add array items
 			if (v instanceof Array) {
 				return '[' + v.map(function (i) {
 					return encodeValue(true, i, format, true);
 				}).join(',') + ']';
 			}
-			
+
 			// TODO: tuples support
 			if (!format) {
 				console.trace();
 			}
-			
+
 			if (v === null) {
 				return format in ESCAPE_NULL ? ESCAPE_NULL[format] : v;
 			}
-			
+
 			return format in ESCAPE_NULL ? ESCAPE_NULL[format] : v;
 		case 'boolean':
 			return v === true ? 1 : 0;
@@ -223,20 +224,20 @@ function encodeValue(quote, v, _format, isArray) {
 
 function getErrorObj(res) {
 	const err = new Error(`${res.statusCode}: ${res.body || res.statusMessage}`);
-	
+
 	if (res.body) {
 		const m = res.body.match(R_ERROR);
 		if (m) {
 			if (m[1] && isNaN(parseInt(m[1])) === false) {
 				err.code = parseInt(m[1]);
 			}
-			
+
 			if (m[2]) {
 				err.message = m[2];
 			}
 		}
 	}
-	
+
 	return err;
 }
 
@@ -249,13 +250,13 @@ function isObject(obj) {
 class Rs extends Transform {
 	constructor(reqParams) {
 		super();
-		
+
 		const me = this;
-		
+
 		me.ws = request.post(reqParams);
-		
+
 		me.isPiped = false;
-		
+
 		// Без этого обработчика и вызова read Transform не отрабатывает до конца
 		// https://nodejs.org/api/stream.html#stream_implementing_a_transform_stream
 		// Writing data while the stream is not draining is particularly problematic for a Transform,
@@ -264,66 +265,66 @@ class Rs extends Transform {
 		me.on('readable', function () {
 			let data = me.read();
 		});
-		
+
 		me.pipe(me.ws);
-		
+
 		me.on('pipe', function () {
 			me.isPiped = true;
 		});
 	}
-	
+
 	_transform(chunk, encoding, cb) {
 		cb(null, chunk);
 	}
-	
+
 	writeRow(data) {
 		let row = '';
-		
+
 		if (Array.isArray(data)) {
 			row = ClickHouse.mapRowAsArray(data);
 		} else if (isObject(data)) {
 			throw new Error('Sorry, but it is not work!');
 		}
-		
+
 		let isOk = this.write(
 			row + '\n'
 		);
-		
+
 		this.rowCount++;
-		
+
 		if (isOk) {
 			return Promise.resolve();
 		} else {
 			return new Promise((resolve, reject) => {
 				this.ws.once('drain', err => {
 					if (err) return reject(err);
-					
+
 					resolve();
 				})
 			});
 		}
 	}
-	
-	
+
+
 	exec() {
 		let me = this;
-		
+
 		return new Promise((resolve, reject) => {
 			me.ws
-				.on('error', function(err) {
+				.on('error', function (err) {
 					reject(err);
 				})
 				.on('response', function (res) {
 					if (res.statusCode === 200) {
 						return resolve({ r: 1 });
 					}
-					
+
 					return reject(
 						getErrorObj(res)
 					)
 				});
-			
-			if ( ! me.isPiped) {
+
+			if (!me.isPiped) {
 				me.end();
 			}
 		});
@@ -334,54 +335,54 @@ class Rs extends Transform {
 class QueryCursor {
 	constructor(connection, query, data, opts = {}) {
 		this.connection = connection;
-		
+
 		this.query = query;
 		this.data = data;
-		
-		this.opts = _.merge({}, opts,  { format: this.connection.opts.format });
-		
+
+		this.opts = _.merge({}, opts, { format: this.connection.opts.format });
+
 		// Sometime needs to override format by query
 		const formatFromQuery = ClickHouse.getFormatFromQuery(this.query);
 		if (formatFromQuery && formatFromQuery !== this.format) {
 			this.opts.format = formatFromQuery;
 		}
-		
+
 		this.useTotals = false;
 		this._request = null;
 		this.queryId = opts.queryId || uuidv4();
-		
+
 		if (this.isDebug) {
-			console.log('QueryCursor', {query: this.query, data: this.data, opts: this.opts});
+			console.log('QueryCursor', { query: this.query, data: this.data, opts: this.opts });
 		}
 	}
-	
+
 	get isInsert() {
 		return !!this.query.match(/^insert/i);
 	}
-	
+
 	get isDebug() {
 		return this.connection.opts.debug;
 	}
-	
+
 	get format() {
 		return this.opts.format;
 	}
-	
+
 	// TODO Add check for white list of formats
 	set format(newFormat) {
 		this.opts.format = newFormat;
 	}
-	
+
 	_getBodyForInsert() {
 		const me = this;
-		
+
 		let query = me.query;
 		let data = me.data;
-		
-		let values          = [],
-			fieldList       = [],
+
+		let values = [],
+			fieldList = [],
 			isFirstElObject = false;
-		
+
 		if (Array.isArray(data) && Array.isArray(data[0])) {
 			values = data;
 		} else if (Array.isArray(data) && isObject(data[0])) {
@@ -393,7 +394,7 @@ class QueryCursor {
 		} else {
 			throw new Error('ClickHouse._getBodyForInsert: data is invalid format');
 		}
-		
+
 		if (isFirstElObject) {
 			let m = query.match(/INSERT INTO (.+?) \((.+?)\)/);
 			if (m) {
@@ -402,7 +403,7 @@ class QueryCursor {
 				throw new Error('insert query wasnt parsed field list after TABLE_NAME');
 			}
 		}
-		
+
 		return values.map(row => {
 			if (isFirstElObject) {
 				return ClickHouse.mapRowAsObject(fieldList, row);
@@ -411,11 +412,11 @@ class QueryCursor {
 			}
 		}).join('\n');
 	}
-	
-	
+
+
 	_getReqParams() {
 		const me = this;
-		
+
 		const {
 			reqParams,
 			config,
@@ -423,7 +424,7 @@ class QueryCursor {
 			password,
 			database,
 		} = me.connection.opts;
-		
+
 		const params = _.merge({
 			headers: {
 				'Content-Type': 'text/plain'
@@ -432,52 +433,52 @@ class QueryCursor {
 		const configQS = _.merge({}, config, {
 			query_id: me.queryId,
 		});
-		
+
 		if (database) {
 			configQS.database = database;
 		}
-		
+
 		const url = new URL(me.connection.url);
-		
+
 		if (username) {
 			url.searchParams.append('user', username);
 		}
-		
+
 		if (password) {
 			url.searchParams.append('password', password);
 		}
-		
+
 		Object.keys(configQS).forEach(k => {
 			url.searchParams.append(k, configQS[k]);
 		});
-		
-		
+
+
 		let data = me.data;
 		let query = me.query;
-		
+
 		if (typeof query === 'string') {
 			if (/with totals/i.test(query)) {
 				me.useTotals = true;
 			}
-			
+
 			// Hack for Sequelize ORM
 			query = query.trim().trimEnd().replace(/;$/gm, "");
-			
+
 			if (query.match(/^(select|show|exists)/i)) {
-				if ( ! R_FORMAT_PARSER.test(query)) {
+				if (!R_FORMAT_PARSER.test(query)) {
 					query += ` FORMAT ${ClickHouse.getFullFormatName(me.format)}`;
 				}
-				
+
 				query += ';';
-				
+
 				if (data && data.external) {
 					params['formData'] = data.external.reduce(
-						function(formData, external) {
+						function (formData, external) {
 							url.searchParams.append(
 								`${external.name}_structure`,
 								external.structure || 'str String'
 							);
-							
+
 							formData[external.name] = {
 								value: external.data.join('\n'),
 								options: {
@@ -485,7 +486,7 @@ class QueryCursor {
 									contentType: 'text/plain'
 								}
 							};
-							
+
 							return formData;
 						},
 						{}
@@ -493,32 +494,32 @@ class QueryCursor {
 				}
 			} else if (query.match(/^insert/i)) {
 				query += ' FORMAT TabSeparated';
-				
+
 				if (data) {
 					params['body'] = me._getBodyForInsert();
 				}
 			}
 		}
-		
+
 		url.searchParams.append('query', query);
-		
+
 		if (me.connection.isUseGzip) {
-			params.headers['Accept-Encoding']  = 'gzip';
+			params.headers['Accept-Encoding'] = 'gzip';
 		}
-		
+
 		if (me.isDebug) {
 			console.log('QueryCursor._getReqParams: params', me.query, params);
 		}
-		
+
 		params['url'] = url.toString();
-		
+
 		return params;
 	}
-	
+
 	exec(cb) {
 		const me = this;
 		const reqParams = me._getReqParams();
-		
+
 		me._request = request.post(reqParams, (err, res) => {
 			if (me.isDebug) {
 				console.log('QueryCursor.exec: result', me.query, err, _.pick(res, [
@@ -528,7 +529,7 @@ class QueryCursor {
 					'headers'
 				]));
 			}
-			
+
 			if (err) {
 				return cb(err);
 			} else if (res.statusCode !== 200) {
@@ -536,18 +537,18 @@ class QueryCursor {
 					getErrorObj(res)
 				);
 			}
-			
-			if ( ! res.body) {
-				return cb(null, {r: 1});
+
+			if (!res.body) {
+				return cb(null, { r: 1 });
 			}
 
 			try {
 				let data = me.getBodyParser()(res.body);
-				
+
 				if (me.format === 'json') {
 					data = data.data;
 				}
-				
+
 				if (me.useTotals) {
 					const totals = JSON.parse(res.headers['x-clickhouse-summary']);
 					return cb(
@@ -561,7 +562,7 @@ class QueryCursor {
 						}
 					);
 				}
-				
+
 				cb(null, data);
 			} catch (err) {
 				cb(err);
@@ -573,94 +574,94 @@ class QueryCursor {
 		if (this.format === 'json') {
 			return JSON.parse;
 		}
-		
+
 		if (this.format === 'tsv') {
 			return parseTSV;
 		}
-		
+
 		if (this.format === 'csv') {
 			return parseCSV;
 		}
-		
+
 		throw new Error(`CursorQuery.getBodyParser: unknown format "${this.format}"`);
 	};
-	
+
 	getStreamParser() {
 		if (this.format === 'json') {
 			return parseJSONStream;
 		}
-		
+
 		if (this.format === 'tsv') {
 			return parseTSVStream;
 		}
-		
+
 		if (this.format === 'csv') {
 			return parseCSVStream;
 		}
-		
+
 		throw new Error(`CursorQuery.getStreamParser: unknown format "${this.format}"`);
 	}
 
 	withTotals() {
-		this.useTotals  = true;
+		this.useTotals = true;
 		return this;
 	}
-	
+
 	toPromise() {
 		let me = this;
-		
+
 		return new Promise((resolve, reject) => {
 			me.exec(function (err, data) {
 				if (err) return reject(err);
-				
+
 				resolve(data);
 			})
 		});
 	}
-	
+
 	stream() {
 		const me = this;
-		
+
 		const reqParams = me._getReqParams();
-		
+
 		if (me.isInsert) {
 			const rs = new Rs(reqParams);
 			rs.query = me.query;
-			
+
 			me._request = rs;
-			
+
 			return rs;
 		} else {
 			const streamParser = this.getStreamParser()();
-			
+
 			const rs = new Readable({ objectMode: true });
-			rs._read = () => {};
+			rs._read = () => { };
 			rs.query = me.query;
-			
+
 			const tf = new Transform({ objectMode: true });
 			let isFirstChunk = true;
 			tf._transform = function (chunk, encoding, cb) {
-				
+
 				// В независимости от формата, в случае ошибки, в теле ответа будет текс,
 				// подпадающий под регулярку R_ERROR.
 				if (isFirstChunk) {
 					isFirstChunk = false;
-					
+
 					if (R_ERROR.test(chunk.toString())) {
 						streamParser.emit('error', new Error(chunk.toString()));
 						rs.emit('close');
-						
+
 						return cb();
 					}
 				}
-				
+
 				cb(null, chunk);
 			};
-			
+
 			let metaData = {};
-			
+
 			const requestStream = request.post(reqParams);
-			
+
 			// Не делаем .pipe(rs) потому что rs - Readable,
 			// а для pipe нужен Writable
 			let s;
@@ -670,7 +671,7 @@ class QueryCursor {
 			} else {
 				s = requestStream.pipe(tf).pipe(streamParser)
 			}
-			
+
 			s
 				.on('error', function (err) {
 					rs.emit('error', err);
@@ -690,33 +691,33 @@ class QueryCursor {
 				.on('end', function () {
 					rs.emit('end');
 				});
-			
+
 			rs.__pause = rs.pause;
-			rs.pause  = () => {
+			rs.pause = () => {
 				rs.__pause();
 				requestStream.pause();
 				streamParser.pause();
 			};
-			
+
 			rs.__resume = rs.resume;
 			rs.resume = () => {
 				rs.__resume();
 				requestStream.resume();
 				streamParser.resume();
 			};
-			
+
 			me._request = rs;
-			
+
 			return stream2asynciter(rs);
 		}
 	}
-	
-	
+
+
 	destroy() {
 		const me = this;
-		
+
 		let isCallDestroy = false;
-		
+
 		if (me._request instanceof Readable) {
 			isCallDestroy = true;
 			me._request.destroy();
@@ -724,23 +725,23 @@ class QueryCursor {
 			isCallDestroy = true;
 			me._request.abort();
 		}
-		
+
 		// To trying to kill query by query id
 		if (me.queryId) {
-			
+
 			// Because this realesation work with session witout any ideas,
 			// we need use this hack
 			me.connection.query(
 				`KILL QUERY WHERE query_id = '${me.queryId}' SYNC`, {}, {
-					sessionId: Date.now(),
-				}
-			).exec(() => {});
+				sessionId: Date.now(),
+			}
+			).exec(() => { });
 		}
-		
+
 		if (isCallDestroy) {
-			return ;
+			return;
 		}
-		
+
 		throw new Error('QueryCursor.destroy error: private field _request is invalid');
 	}
 }
@@ -756,60 +757,60 @@ class ClickHouse {
 				basicAuth: null,
 				isUseGzip: false,
 				config: {
-					session_timeout                         : 60,
-					output_format_json_quote_64bit_integers : 0,
-					enable_http_compression                 : 0
+					session_timeout: 60,
+					output_format_json_quote_64bit_integers: 0,
+					enable_http_compression: 0
 				},
-                format: 'json',
+				format: 'json',
 			},
 			opts
 		);
-		
-		
-		let url  = opts.url || opts.host || URI,
+
+
+		let url = opts.url || opts.host || URI,
 			port = opts.port || PORT;
-		
-		if ( ! url.match(/^https?/)) {
+
+		if (!url.match(/^https?/)) {
 			url = 'http://' + url;
 		}
-		
+
 		const u = new URL(url);
-		
+
 		if (u.protocol === 'https:' && (port === 443 || port === 8123)) {
 			u.port = '';
 		} else if (port) {
 			u.port = port;
 		}
-		
+
 		this.opts.url = u.toString();
 
 		this.opts.username = this.opts.user || this.opts.username || USERNAME;
 	}
-	
+
 	get sessionId() {
 		return this.opts.config.session_id;
 	}
-	
+
 	set sessionId(sessionId) {
 		this.opts.config.session_id = '' + sessionId;
 		return this;
 	}
-	
+
 	noSession() {
 		delete this.opts.config.session_id;
-		
+
 		return this;
 	}
-	
+
 	get sessionTimeout() {
 		return this.opts.config.session_timeout;
 	}
-	
+
 	set sessionTimeout(timeout) {
 		this.opts.config.session_timeout = timeout;
 		return this;
 	}
-	
+
 	get url() {
 		if (this.opts.basicAuth) {
 			const u = new URL(this.opts.url);
@@ -822,37 +823,37 @@ class ClickHouse {
 
 		return this.opts.url;
 	}
-	
+
 	set url(url) {
 		this.opts.url = url;
 		return this;
 	}
-	
+
 	get port() {
 		return this.opts.port;
 	}
-	
+
 	set port(port) {
 		this.opts.port = port;
 		return this;
 	}
-	
+
 	get isUseGzip() {
 		return this.opts.isUseGzip;
 	}
-	
+
 	set isUseGzip(val) {
 		this.opts.isUseGzip = !!val;
-		
+
 		this.opts.config.enable_http_compression = this.opts.isUseGzip ? 1 : 0;
 	}
-	
+
 	static mapRowAsArray(row) {
 		return row
 			.map(value => encodeValue(false, value, 'TabSeparated'))
 			.join('\t');
 	}
-	
+
 	static mapRowAsObject(fieldList, row) {
 		return fieldList
 			.map(f => {
@@ -860,56 +861,56 @@ class ClickHouse {
 			})
 			.join('\t');
 	}
-	
+
 	static getFullFormatName(format = '') {
-		if ( ! FORMATS[format]) {
+		if (!FORMATS[format]) {
 			throw new Error(`Clickhouse.getFullFormatName: unknown format "${format}`);
 		}
-		
+
 		return FORMATS[format];
 	}
-	
+
 	static getFormatFromQuery(query = '') {
-		if ( ! query) {
+		if (!query) {
 			throw new Error(`Clickhouse.getFormatFromQuery: query is empty!`);
 		}
-		
+
 		// We use regexp with "g" flag then match doen't return first group.
 		// So, use exec.
 		const m = R_FORMAT_PARSER.exec(query);
 		if (m) {
 			const format = m[1];
-			if ( ! REVERSE_FORMATS[format]) {
+			if (!REVERSE_FORMATS[format]) {
 				throw new Error(`Clickhouse.getFormatFromQuery: unknown format "${format}"!`);
 			}
-			
+
 			return REVERSE_FORMATS[format];
 		}
-		
+
 		return '';
 	}
-	
+
 	static getFormats() {
 		return Object.keys(FORMATS).map(k => ({ format: k, fullFormatExpr: FORMATS[k], }));
 	}
-	
+
 	query(...args) {
 		if (typeof args[args.length - 1] === 'function') {
 			const newArgs = args.slice(0, args.length);
 			const cb = args[args.length - 1];
-			
+
 			return new QueryCursor(this, ...newArgs).exec(cb);
 		}
-		
+
 		return new QueryCursor(this, ...args);
 	}
-	
+
 	insert(query, data) {
 		return new QueryCursor(this, query, data);
 	}
 }
 
 module.exports = {
-    ClickHouse,
+	ClickHouse,
 };
 
